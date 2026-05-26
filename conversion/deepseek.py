@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import re
 
 from typing import Any, Callable, Iterable, TYPE_CHECKING
@@ -184,6 +185,7 @@ class DeepseekV2Model(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._maybe_load_diffusion_hparams()
         hparams: dict = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
@@ -194,6 +196,37 @@ class DeepseekV2Model(TextModel):
             self.gguf_writer.add_architecture()
             # default jinja template
             self.gguf_writer.add_chat_template("{% for m in messages %}{{m['content']}}{% endfor %}")
+
+    def _maybe_load_diffusion_hparams(self) -> None:
+        required_keys = ("diffusion_mode_on", "diffusion_block_size", "mask_token_id")
+        if all(key in self.hparams for key in required_keys):
+            return
+
+        config_path = self.dir_model / "configuration_deepseek.py"
+        if not config_path.is_file():
+            return
+
+        try:
+            spec = importlib.util.spec_from_file_location("llama_cpp_deepseek_config", config_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Failed to load spec from {config_path}")
+
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            config_cls = getattr(module, "DeepseekV3Config", None)
+            if config_cls is None:
+                raise RuntimeError("configuration_deepseek.py does not define DeepseekV3Config")
+
+            full_config = config_cls(**self.hparams)
+        except Exception as exc:
+            logger.warning("Failed to load local diffusion config overrides: %s", exc)
+            return
+
+        for key in required_keys:
+            value = getattr(full_config, key, None)
+            if value is not None:
+                self.hparams[key] = value
 
     def set_vocab(self):
         try:
@@ -311,6 +344,17 @@ class DeepseekV2Model(TextModel):
             # note: for legacy reasons, this is not consistent with the other usages of self.gguf_writer.add_rope_scaling_yarn_log_mul
             # ref https://github.com/ggml-org/llama.cpp/pull/17945
             self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * rope_mscale_all)
+
+        if hparams.get("diffusion_mode_on"):
+            if (mask_token_id := hparams.get("mask_token_id")) is not None:
+                self.gguf_writer.add_mask_token_id(mask_token_id)
+            if (block_size := hparams.get("diffusion_block_size")) is not None:
+                self.gguf_writer.add_uint32("diffusion.block_size", block_size)
+
+            self.gguf_writer.add_bool("diffusion.block_causal", True)
+            self.gguf_writer.add_float32("diffusion.confidence_threshold", 0.95)
+            self.gguf_writer.add_causal_attention(False)
+            self.gguf_writer.add_diffusion_shift_logits(False)
 
     _experts: list[dict[str, Tensor]] | None = None
 

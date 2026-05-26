@@ -20,6 +20,7 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,        hparams.expert_weights_norm, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,         hparams.expert_gating_func, false);
+    ml.get_key("diffusion.block_size",            hparams.n_diffusion_block, false);
     if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
         // for compatibility with existing DeepSeek V2 and V2.5 GGUFs
         // that have no expert_gating_func model parameter set
@@ -49,6 +50,10 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
         case 60: type = LLM_TYPE_236B; break;
         case 61: type = LLM_TYPE_671B; break;
         default: type = LLM_TYPE_UNKNOWN;
+    }
+
+    if (hparams.n_diffusion_block > 0) {
+        hparams.causal_attn = false;
     }
 }
 
@@ -147,6 +152,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
     llm_graph_context(params) {
     // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
     bool is_ocr = model.arch == LLM_ARCH_DEEPSEEK2OCR;
+    const bool is_diffusion = hparams.n_diffusion_block > 0;
 
     const bool is_mla = hparams.is_mla();
 
@@ -186,8 +192,9 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn_kv = !is_mla ? build_attn_inp_kv() : nullptr;
-    auto * inp_attn_k  =  is_mla ? build_attn_inp_k()  : nullptr;
+    auto * inp_attn_no_cache = is_diffusion ? build_attn_inp_no_cache() : nullptr;
+    auto * inp_attn_kv       = !is_mla && !is_diffusion ? build_attn_inp_kv() : nullptr;
+    auto * inp_attn_k        =  is_mla && !is_diffusion ? build_attn_inp_k()  : nullptr;
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -226,7 +233,11 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
             cb(Qcur, "q_pe", il);
             cb(Kcur, "k_pe", il);
 
-            cur = build_attn(inp_attn_kv,
+            cur = is_diffusion ?
+                build_attn(inp_attn_no_cache,
+                        model.layers[il].wo, NULL, model.layers[il].wo_s,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il) :
+                build_attn(inp_attn_kv,
                         model.layers[il].wo, NULL, model.layers[il].wo_s,
                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
@@ -324,7 +335,11 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                 }
 
                 // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
-                cur = build_attn(inp_attn_k,
+                cur = is_diffusion ?
+                    build_attn(inp_attn_no_cache,
+                        model.layers[il].wo, NULL, model.layers[il].wo_s,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il) :
+                    build_attn(inp_attn_k,
                         model.layers[il].wo, NULL, model.layers[il].wo_s,
                         Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
             } else {
@@ -361,7 +376,11 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                 }
 
                 // note: MLA without the absorption optimization converts into MHA (ie: GQA with full n_head groups)
-                cur = build_attn(inp_attn_kv,
+                cur = is_diffusion ?
+                    build_attn(inp_attn_no_cache,
+                            model.layers[il].wo, NULL, model.layers[il].wo_s,
+                            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il) :
+                    build_attn(inp_attn_kv,
                             model.layers[il].wo, NULL, model.layers[il].wo_s,
                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             }

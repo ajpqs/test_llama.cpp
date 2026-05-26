@@ -44,7 +44,9 @@ struct diffusion_params {
     float   eps              = 0.;     // Timestep scheduling
     int32_t block_length     = 0;      // Block size (for block scheduling)
     float   alg_temp         = 0;      // algorithm temperature (0.0 = deterministic)
+    float   confidence_threshold = 0.95f; // low-confidence fast path threshold
     bool    add_gumbel_noise = false;  // Add gumbel noise to the logits if temp > 0.0
+    bool    block_causal     = false;  // Use block-causal attention inside the model
 
     int32_t max_length = 0;            // Maximum sequence length
 };

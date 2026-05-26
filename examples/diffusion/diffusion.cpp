@@ -100,6 +100,218 @@ static std::vector<int32_t> get_num_transfer_tokens(int32_t mask_count, int32_t 
     return num_transfer_tokens;
 }
 
+static void diffusion_generate_block_causal(llama_context *          ctx,
+                                            const llama_token *      input_tokens,
+                                            llama_token *            output_tokens,
+                                            int32_t                  n_input,
+                                            const diffusion_params & params,
+                                            int32_t &                n_generated) {
+    n_generated = 0;
+
+    GGML_ASSERT(params.block_length > 0);
+    GGML_ASSERT(params.max_length % params.block_length == 0);
+
+    std::copy(input_tokens, input_tokens + n_input, output_tokens);
+    std::fill(output_tokens + n_input, output_tokens + params.max_length, params.mask_token_id);
+
+    const llama_model * model   = llama_get_model(ctx);
+    const int32_t       n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+
+    std::mt19937 rng(params.seed);
+
+    llama_set_causal_attn(ctx, false);
+
+    struct llama_sampler * sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    if (params.top_k > 0) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(params.top_k));
+    }
+    if (params.top_p < 1.0f) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(params.top_p, 1));
+    }
+    if (params.temperature > 0.0f) {
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(params.temperature));
+    }
+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(params.seed));
+
+    llama_batch batch = llama_batch_init(params.max_length, 0, 1);
+
+    std::vector<llama_token_data> candidates(n_vocab);
+    std::vector<std::pair<float, int32_t>> confidence_by_pos;
+    std::vector<llama_token> sampled_tokens(params.block_length);
+    std::vector<float> sampled_probs(params.block_length);
+    std::vector<int32_t> active_positions;
+    active_positions.reserve(params.block_length);
+
+    const int32_t block_length    = params.block_length;
+    const int32_t num_blocks      = params.max_length / block_length;
+    const int32_t prefill_blocks  = n_input / block_length;
+    const int32_t steps_per_block = params.steps;
+    const auto    transfer_counts = get_num_transfer_tokens(block_length, steps_per_block);
+    const int32_t total_steps     = std::max(0, num_blocks - prefill_blocks) * steps_per_block;
+
+    int64_t total_sampling_time = 0;
+    int64_t total_time          = 0;
+    int64_t time_start          = ggml_time_us();
+    int32_t progress_step       = 0;
+
+    for (int32_t block_idx = prefill_blocks; block_idx < num_blocks; ++block_idx) {
+        const int32_t block_start        = block_idx * block_length;
+        const int32_t current_window_end = (block_idx + 1) * block_length;
+
+        for (int32_t step = 0; step < steps_per_block; ++step) {
+            if (params.step_callback) {
+                if (!params.step_callback(progress_step, total_steps, output_tokens, params.max_length, params.step_callback_user_data)) {
+                    break;
+                }
+            }
+
+            active_positions.clear();
+            for (int32_t pos = block_start; pos < current_window_end; ++pos) {
+                if (output_tokens[pos] == params.mask_token_id) {
+                    active_positions.push_back(pos);
+                }
+            }
+
+            if (active_positions.empty()) {
+                break;
+            }
+
+            batch.n_tokens = current_window_end;
+            for (int32_t i = 0; i < current_window_end; ++i) {
+                batch.token[i]     = output_tokens[i];
+                batch.pos[i]       = i;
+                batch.n_seq_id[i]  = 1;
+                batch.seq_id[i][0] = 0;
+                batch.logits[i]    = 1;
+            }
+
+            const int ret = llama_decode(ctx, batch);
+            if (ret != 0) {
+                LOG_ERR("%s: failed to decode at block %d step %d, ret = %d\n", __func__, block_idx, step, ret);
+                goto cleanup;
+            }
+
+            float * logits = llama_get_logits(ctx);
+            if (!logits) {
+                LOG_ERR("%s: failed to get logits at block %d step %d\n", __func__, block_idx, step);
+                goto cleanup;
+            }
+
+            auto get_logits_for_pos = [&](int32_t pos) -> float * {
+                if (params.shift_logits) {
+                    return pos == 0 ? logits : logits + (pos - 1) * n_vocab;
+                }
+                return logits + pos * n_vocab;
+            };
+
+            int64_t time_start_sampling = ggml_time_us();
+
+            confidence_by_pos.clear();
+
+            for (int32_t i = 0; i < block_length; ++i) {
+                sampled_tokens[i] = params.mask_token_id;
+                sampled_probs[i]  = -INFINITY;
+            }
+
+            for (int32_t pos : active_positions) {
+                float * pos_logits = get_logits_for_pos(pos);
+
+                if (params.add_gumbel_noise && params.temperature > 0.0f) {
+                    add_gumbel_noise(pos_logits, n_vocab, params.temperature, rng);
+                }
+
+                for (int32_t token_id = 0; token_id < n_vocab; ++token_id) {
+                    candidates[token_id].id    = token_id;
+                    candidates[token_id].logit = pos_logits[token_id];
+                    candidates[token_id].p     = 0.0f;
+                }
+
+                llama_token_data_array cur_p = {
+                    candidates.data(),
+                    candidates.size(),
+                    -1,
+                    false,
+                };
+
+                llama_sampler_apply(sampler, &cur_p);
+
+                const int32_t block_pos = pos - block_start;
+                sampled_tokens[block_pos] = cur_p.data[cur_p.selected].id;
+                sampled_probs[block_pos]  = cur_p.data[cur_p.selected].p;
+                confidence_by_pos.emplace_back(
+                    params.algorithm == DIFFUSION_ALGORITHM_CONFIDENCE_BASED ?
+                        sampled_probs[block_pos] :
+                        calculate_confidence(cur_p, params.algorithm, rng),
+                    pos);
+            }
+
+            const int32_t num_to_transfer = transfer_counts[step];
+
+            if (params.algorithm == DIFFUSION_ALGORITHM_CONFIDENCE_BASED) {
+                int32_t high_conf_count = 0;
+                for (const auto & [confidence, _] : confidence_by_pos) {
+                    if (confidence > params.confidence_threshold) {
+                        ++high_conf_count;
+                    }
+                }
+
+                if (high_conf_count >= num_to_transfer) {
+                    for (const auto & [confidence, pos] : confidence_by_pos) {
+                        if (confidence > params.confidence_threshold) {
+                            output_tokens[pos] = sampled_tokens[pos - block_start];
+                        }
+                    }
+                } else if (num_to_transfer > 0) {
+                    std::partial_sort(confidence_by_pos.begin(),
+                                      confidence_by_pos.begin() + std::min(num_to_transfer, (int32_t) confidence_by_pos.size()),
+                                      confidence_by_pos.end(),
+                                      [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
+                                          if (a.first != b.first) {
+                                              return a.first > b.first;
+                                          }
+                                          return a.second < b.second;
+                                      });
+
+                    for (int32_t i = 0; i < std::min(num_to_transfer, (int32_t) confidence_by_pos.size()); ++i) {
+                        const int32_t pos = confidence_by_pos[i].second;
+                        output_tokens[pos] = sampled_tokens[pos - block_start];
+                    }
+                }
+            } else if (num_to_transfer > 0) {
+                std::partial_sort(confidence_by_pos.begin(),
+                                  confidence_by_pos.begin() + std::min(num_to_transfer, (int32_t) confidence_by_pos.size()),
+                                  confidence_by_pos.end(),
+                                  [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
+                                      if (a.first != b.first) {
+                                          return a.first > b.first;
+                                      }
+                                      return a.second < b.second;
+                                  });
+
+                for (int32_t i = 0; i < std::min(num_to_transfer, (int32_t) confidence_by_pos.size()); ++i) {
+                    const int32_t pos = confidence_by_pos[i].second;
+                    output_tokens[pos] = sampled_tokens[pos - block_start];
+                }
+            }
+
+            total_sampling_time += ggml_time_us() - time_start_sampling;
+            ++progress_step;
+        }
+    }
+
+    total_time += ggml_time_us() - time_start;
+    LOG_INF("\ntotal time: %0.2fms, time per step: %0.2fms, sampling time per step: %0.2fms\n",
+            total_time / 1000.0,
+            progress_step > 0 ? total_time / 1000.0 / progress_step : 0.0,
+            progress_step > 0 ? total_sampling_time / 1000.0 / progress_step : 0.0);
+
+    n_generated = params.max_length;
+
+cleanup:
+    llama_batch_free(batch);
+    llama_sampler_free(sampler);
+}
+
 void diffusion_generate(llama_context *          ctx,
                         const llama_token *      input_tokens,
                         llama_token *            output_tokens,
@@ -108,6 +320,11 @@ void diffusion_generate(llama_context *          ctx,
                         int32_t &                n_generated) {
     n_generated = 0;
     if (!ctx || !input_tokens || !output_tokens || n_input <= 0 || params.max_length <= n_input) {
+        return;
+    }
+
+    if (params.block_causal && params.schedule == DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED) {
+        diffusion_generate_block_causal(ctx, input_tokens, output_tokens, n_input, params, n_generated);
         return;
     }
 

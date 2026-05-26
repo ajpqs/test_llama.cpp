@@ -403,9 +403,15 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                     continue;
                 }
 
-                // mask future tokens
-                if (cparams.causal_attn && p0 > p1) {
-                    continue;
+                if (hparams.n_diffusion_block > 0) {
+                    if (p0 / (llama_pos) hparams.n_diffusion_block > p1 / (llama_pos) hparams.n_diffusion_block) {
+                        continue;
+                    }
+                } else {
+                    // mask future tokens
+                    if (cparams.causal_attn && p0 > p1) {
+                        continue;
+                    }
                 }
 
                 // apply SWA if any

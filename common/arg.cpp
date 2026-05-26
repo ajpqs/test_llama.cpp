@@ -3871,6 +3871,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { params.diffusion.alg_temp = std::stof(value); }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--diffusion-confidence-threshold"}, "F",
+        string_format("low-confidence transfer threshold (default: %.3f)", (double) params.diffusion.confidence_threshold),
+        [](common_params & params, const std::string & value) { params.diffusion.confidence_threshold = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--diffusion-block-length"}, "N",
         string_format("llada block length for generation (default: %d)", params.diffusion.block_length),
         [](common_params & params, int value) { params.diffusion.block_length = value; }

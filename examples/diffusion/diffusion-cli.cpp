@@ -8,6 +8,7 @@
 #include <limits.h>
 
 #include <clocale>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -188,6 +189,26 @@ int main(int argc, char ** argv) {
         diff_params.shift_logits = true;
     }
 
+    char block_causal_str[8];
+    if (llama_model_meta_val_str(model, "diffusion.block_causal", block_causal_str, sizeof(block_causal_str)) >= 0) {
+        diff_params.block_causal = (strcmp(block_causal_str, "true") == 0);
+    }
+
+    char block_size_str[16];
+    if (llama_model_meta_val_str(model, "diffusion.block_size", block_size_str, sizeof(block_size_str)) >= 0) {
+        if (params.diffusion.block_length == 0) {
+            params.diffusion.block_length = atoi(block_size_str);
+        }
+        diff_params.block_causal = true;
+    }
+
+    char confidence_threshold_str[32];
+    if (llama_model_meta_val_str(model, "diffusion.confidence_threshold", confidence_threshold_str, sizeof(confidence_threshold_str)) >= 0) {
+        diff_params.confidence_threshold = std::strtof(confidence_threshold_str, nullptr);
+    } else {
+        diff_params.confidence_threshold = params.diffusion.confidence_threshold;
+    }
+
     //Use either eps or block length, but not both
     GGML_ASSERT((params.diffusion.eps == 0) ^ (params.diffusion.block_length == 0));
 
@@ -207,6 +228,8 @@ int main(int argc, char ** argv) {
     diff_params.max_length       = params.n_ubatch;
     diff_params.top_p            = params.sampling.top_p;
     diff_params.top_k            = params.sampling.top_k;
+    diff_params.alg_temp         = params.diffusion.alg_temp;
+    diff_params.cfg_scale        = params.diffusion.cfg_scale;
     diff_params.visual_mode      = params.diffusion.visual_mode;
     diff_params.add_gumbel_noise = params.diffusion.add_gumbel_noise;
 
@@ -236,6 +259,8 @@ int main(int argc, char ** argv) {
     LOG_INF("diffusion_params: - %-25s enum             = %d (%s)\n", "algorithm", diff_params.algorithm, alg_name);
     LOG_INF("diffusion_params: - %-25s enum             = %d (%s)\n", "schedule", diff_params.schedule, sched_name);
     LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "temperature", diff_params.temperature);
+    LOG_INF("diffusion_params: - %-25s bool             = %d\n", "block_causal", diff_params.block_causal);
+    LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "confidence_threshold", diff_params.confidence_threshold);
     if (diff_params.schedule == DIFFUSION_TRANSFER_SCHEDULE_TIMESTEP_BASED) {
         LOG_INF("diffusion_params: - %-25s f32              = %.6f\n", "eps", diff_params.eps);
         LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "alg_temp", diff_params.alg_temp);

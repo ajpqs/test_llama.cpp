@@ -1937,6 +1937,10 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
     llama_memory_i * res;
 
+    if (hparams.n_diffusion_block > 0) {
+        return nullptr;
+    }
+
     switch (arch) {
         // Models that need specific instantiation should be handled in the
         // switch statement
@@ -2503,7 +2507,7 @@ bool llama_model_is_hybrid(const llama_model * model) {
 }
 
 bool llama_model_is_diffusion(const llama_model * model) {
-    return llm_arch_is_diffusion(model->arch);
+    return llm_arch_is_diffusion(model->arch) || model->hparams.n_diffusion_block > 0;
 }
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
