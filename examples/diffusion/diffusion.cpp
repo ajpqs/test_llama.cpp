@@ -180,6 +180,7 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
     int64_t total_time          = 0;
     int64_t time_start          = ggml_time_us();
     int32_t progress_step       = 0;
+    bool    interrupted         = false;
 
     // Finalized prompt blocks use the same block-causal semantics as generated blocks,
     // so prefill them block-by-block instead of using a standard causal prompt pass.
@@ -199,6 +200,7 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
         for (int32_t step = 0; step < steps_per_block; ++step) {
             if (params.step_callback) {
                 if (!params.step_callback(progress_step, total_steps, output_tokens, params.max_length, params.step_callback_user_data)) {
+                    interrupted = true;
                     break;
                 }
             }
@@ -214,8 +216,7 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
                 break;
             }
 
-            // Re-evaluate just the active block. The previous blocks stay cached, while the
-            // current block is dropped and recomputed bidirectionally for this denoising step.
+            // Re-evaluate just the active block. The previous blocks stay cached
             if (!llama_memory_seq_rm(memory, 0, block_start, current_window_end)) {
                 LOG_ERR("%s: failed to drop cache for block %d step %d\n", __func__, block_idx, step);
                 goto cleanup;
@@ -330,6 +331,38 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
             total_sampling_time += ggml_time_us() - time_start_sampling;
             ++progress_step;
         }
+
+        bool block_is_clean = true;
+        for (int32_t pos = block_start; pos < current_window_end; ++pos) {
+            if (output_tokens[pos] == params.mask_token_id) {
+                block_is_clean = false;
+                break;
+            }
+        }
+
+        if (!block_is_clean) {
+            if (interrupted) {
+                break;
+            }
+
+            LOG_ERR("%s: block %d still contains masks after %d denoising steps\n", __func__, block_idx, steps_per_block);
+            goto cleanup;
+        }
+
+        // Cache current decoded block
+        if (!llama_memory_seq_rm(memory, 0, block_start, current_window_end)) {
+            LOG_ERR("%s: failed to drop poisoned cache for bake pass at block %d\n", __func__, block_idx);
+            goto cleanup;
+        }
+
+        if (!decode_block(block_start, false)) {
+            LOG_ERR("%s: failed to bake final clean context for block %d\n", __func__, block_idx);
+            goto cleanup;
+        }
+
+        if (interrupted) {
+            break;
+        }
     }
 
     total_time += ggml_time_us() - time_start;
@@ -337,6 +370,10 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
             total_time / 1000.0,
             progress_step > 0 ? total_time / 1000.0 / progress_step : 0.0,
             progress_step > 0 ? total_sampling_time / 1000.0 / progress_step : 0.0);
+
+    if (interrupted) {
+        goto cleanup;
+    }
 
     n_generated = params.max_length;
 
@@ -423,6 +460,8 @@ void diffusion_generate(llama_context *          ctx,
     int64_t total_sampling_time = 0;
     int64_t total_time          = 0;
     int64_t time_start          = ggml_time_us();
+    bool    interrupted         = false;
+    bool    failed              = false;
 
     for (int block_num = 0; block_num < num_blocks; block_num++) {
         int32_t block_start = (params.schedule == DIFFUSION_TRANSFER_SCHEDULE_BLOCK_BASED) ? n_input + block_num * params.block_length : 0;
@@ -447,6 +486,7 @@ void diffusion_generate(llama_context *          ctx,
             if (params.step_callback) {
                 if (!params.step_callback(
                         global_step, params.steps, output_tokens, params.max_length, params.step_callback_user_data)) {
+                    interrupted = true;
                     break;
                 }
             }
@@ -466,6 +506,7 @@ void diffusion_generate(llama_context *          ctx,
                 int ret = llama_decode(ctx, batch);
                 if (ret != 0) {
                     LOG_ERR("Failed to generate conditional");
+                    failed = true;
                     break;
                 }
                 float * cond_logits_ptr = llama_get_logits(ctx);
@@ -483,6 +524,7 @@ void diffusion_generate(llama_context *          ctx,
                 ret = llama_decode(ctx, batch);
                 if (ret != 0) {
                     LOG_ERR("Failed to generate unconditional");
+                    failed = true;
                     break;
                 }
                 float * uncond_logits = llama_get_logits(ctx);
@@ -497,6 +539,7 @@ void diffusion_generate(llama_context *          ctx,
                 int ret = llama_decode(ctx, batch);
                 if (ret != 0) {
                     LOG_ERR("%s: failed to decode at step %d, ret = %d\n", __func__, global_step, ret);
+                    failed = true;
                     break;
                 }
                 logits = llama_get_logits(ctx);
@@ -504,6 +547,7 @@ void diffusion_generate(llama_context *          ctx,
 
             if (!logits) {
                 LOG_ERR("%s: failed to get logits at step %d\n", __func__, global_step);
+                failed = true;
                 break;
             }
 
@@ -640,6 +684,10 @@ void diffusion_generate(llama_context *          ctx,
             int64_t time_end_sampling = ggml_time_us();
             total_sampling_time += time_end_sampling - time_start_sampling;
         }
+
+        if (failed || interrupted) {
+            break;
+        }
     }
 
     int64_t time_end = ggml_time_us();
@@ -647,12 +695,16 @@ void diffusion_generate(llama_context *          ctx,
 
     LOG_INF("\ntotal time: %0.2fms, time per step: %0.2fms, sampling time per step: %0.2fms\n",
             total_time / 1000.0,
-            total_time / 1000.0 / params.steps,
-            total_sampling_time / 1000.0 / params.steps);
+            params.steps > 0 ? total_time / 1000.0 / params.steps : 0.0,
+            params.steps > 0 ? total_sampling_time / 1000.0 / params.steps : 0.0);
 
     llama_batch_free(batch);
     llama_sampler_free(sampler);
     llama_sampler_free(dist_sampler);
+
+    if (failed || interrupted) {
+        return;
+    }
 
     n_generated = params.max_length;
 }
