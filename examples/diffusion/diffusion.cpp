@@ -114,12 +114,24 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
     std::copy(input_tokens, input_tokens + n_input, output_tokens);
     std::fill(output_tokens + n_input, output_tokens + params.max_length, params.mask_token_id);
 
+    if (params.shift_logits) {
+        LOG_ERR("%s: cached block-causal diffusion requires unshifted logits\n", __func__);
+        return;
+    }
+
     const llama_model * model   = llama_get_model(ctx);
     const int32_t       n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    llama_memory_t      memory  = llama_get_memory(ctx);
+
+    if (!memory) {
+        LOG_ERR("%s: block-causal diffusion requires a memory module\n", __func__);
+        return;
+    }
 
     std::mt19937 rng(params.seed);
 
     llama_set_causal_attn(ctx, false);
+    llama_memory_clear(memory, false);
 
     struct llama_sampler * sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
     if (params.top_k > 0) {
@@ -133,15 +145,6 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
     }
     llama_sampler_chain_add(sampler, llama_sampler_init_dist(params.seed));
 
-    llama_batch batch = llama_batch_init(params.max_length, 0, 1);
-
-    std::vector<llama_token_data> candidates(n_vocab);
-    std::vector<std::pair<float, int32_t>> confidence_by_pos;
-    std::vector<llama_token> sampled_tokens(params.block_length);
-    std::vector<float> sampled_probs(params.block_length);
-    std::vector<int32_t> active_positions;
-    active_positions.reserve(params.block_length);
-
     const int32_t block_length    = params.block_length;
     const int32_t num_blocks      = params.max_length / block_length;
     const int32_t prefill_blocks  = n_input / block_length;
@@ -149,10 +152,45 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
     const auto    transfer_counts = get_num_transfer_tokens(block_length, steps_per_block);
     const int32_t total_steps     = std::max(0, num_blocks - prefill_blocks) * steps_per_block;
 
+    llama_batch batch = llama_batch_init(block_length, 0, 1);
+
+    std::vector<llama_token_data> candidates(n_vocab);
+    std::vector<std::pair<float, int32_t>> confidence_by_pos;
+    std::vector<llama_token> sampled_tokens(block_length);
+    std::vector<float> sampled_probs(block_length);
+    std::vector<int32_t> active_positions;
+    active_positions.reserve(block_length);
+
+    auto decode_block = [&](int32_t block_start, bool need_logits) -> bool {
+        batch.n_tokens = block_length;
+        for (int32_t i = 0; i < block_length; ++i) {
+            const int32_t absolute_pos = block_start + i;
+
+            batch.token[i]     = output_tokens[absolute_pos];
+            batch.pos[i]       = absolute_pos;
+            batch.n_seq_id[i]  = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i]    = need_logits ? 1 : 0;
+        }
+
+        return llama_decode(ctx, batch) == 0;
+    };
+
     int64_t total_sampling_time = 0;
     int64_t total_time          = 0;
     int64_t time_start          = ggml_time_us();
     int32_t progress_step       = 0;
+
+    // Finalized prompt blocks use the same block-causal semantics as generated blocks,
+    // so prefill them block-by-block instead of using a standard causal prompt pass.
+    for (int32_t block_idx = 0; block_idx < prefill_blocks; ++block_idx) {
+        const int32_t block_start = block_idx * block_length;
+
+        if (!decode_block(block_start, false)) {
+            LOG_ERR("%s: failed to prefill block %d\n", __func__, block_idx);
+            goto cleanup;
+        }
+    }
 
     for (int32_t block_idx = prefill_blocks; block_idx < num_blocks; ++block_idx) {
         const int32_t block_start        = block_idx * block_length;
@@ -176,18 +214,15 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
                 break;
             }
 
-            batch.n_tokens = current_window_end;
-            for (int32_t i = 0; i < current_window_end; ++i) {
-                batch.token[i]     = output_tokens[i];
-                batch.pos[i]       = i;
-                batch.n_seq_id[i]  = 1;
-                batch.seq_id[i][0] = 0;
-                batch.logits[i]    = 1;
+            // Re-evaluate just the active block. The previous blocks stay cached, while the
+            // current block is dropped and recomputed bidirectionally for this denoising step.
+            if (!llama_memory_seq_rm(memory, 0, block_start, current_window_end)) {
+                LOG_ERR("%s: failed to drop cache for block %d step %d\n", __func__, block_idx, step);
+                goto cleanup;
             }
 
-            const int ret = llama_decode(ctx, batch);
-            if (ret != 0) {
-                LOG_ERR("%s: failed to decode at block %d step %d, ret = %d\n", __func__, block_idx, step, ret);
+            if (!decode_block(block_start, true)) {
+                LOG_ERR("%s: failed to decode at block %d step %d\n", __func__, block_idx, step);
                 goto cleanup;
             }
 
@@ -198,10 +233,8 @@ static void diffusion_generate_block_causal(llama_context *          ctx,
             }
 
             auto get_logits_for_pos = [&](int32_t pos) -> float * {
-                if (params.shift_logits) {
-                    return pos == 0 ? logits : logits + (pos - 1) * n_vocab;
-                }
-                return logits + pos * n_vocab;
+                const int32_t block_pos = pos - block_start;
+                return logits + block_pos * n_vocab;
             };
 
             int64_t time_start_sampling = ggml_time_us();

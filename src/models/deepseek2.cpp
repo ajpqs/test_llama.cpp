@@ -152,7 +152,6 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
     llm_graph_context(params) {
     // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
     bool is_ocr = model.arch == LLM_ARCH_DEEPSEEK2OCR;
-    const bool is_diffusion = hparams.n_diffusion_block > 0;
 
     const bool is_mla = hparams.is_mla();
 
@@ -192,9 +191,8 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn_no_cache = is_diffusion ? build_attn_inp_no_cache() : nullptr;
-    auto * inp_attn_kv       = !is_mla && !is_diffusion ? build_attn_inp_kv() : nullptr;
-    auto * inp_attn_k        =  is_mla && !is_diffusion ? build_attn_inp_k()  : nullptr;
+    auto * inp_attn_kv = !is_mla ? build_attn_inp_kv() : nullptr;
+    auto * inp_attn_k  =  is_mla ? build_attn_inp_k()  : nullptr;
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -233,13 +231,9 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
             cb(Qcur, "q_pe", il);
             cb(Kcur, "k_pe", il);
 
-            cur = is_diffusion ?
-                build_attn(inp_attn_no_cache,
-                        model.layers[il].wo, NULL, model.layers[il].wo_s,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il) :
-                build_attn(inp_attn_kv,
-                        model.layers[il].wo, NULL, model.layers[il].wo_s,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            cur = build_attn(inp_attn_kv,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
         else {
@@ -335,13 +329,9 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                 }
 
                 // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
-                cur = is_diffusion ?
-                    build_attn(inp_attn_no_cache,
-                        model.layers[il].wo, NULL, model.layers[il].wo_s,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il) :
-                    build_attn(inp_attn_k,
-                        model.layers[il].wo, NULL, model.layers[il].wo_s,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
+                cur = build_attn(inp_attn_k,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
             } else {
                 ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cmpr);
                 cb(kv, "kv", il);
@@ -376,13 +366,9 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                 }
 
                 // note: MLA without the absorption optimization converts into MHA (ie: GQA with full n_head groups)
-                cur = is_diffusion ?
-                    build_attn(inp_attn_no_cache,
-                            model.layers[il].wo, NULL, model.layers[il].wo_s,
-                            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il) :
-                    build_attn(inp_attn_kv,
-                            model.layers[il].wo, NULL, model.layers[il].wo_s,
-                            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                cur = build_attn(inp_attn_kv,
+                        model.layers[il].wo, NULL, model.layers[il].wo_s,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             }
         }
         if (il == effective_n_layers - 1 && inp_out_ids) {
