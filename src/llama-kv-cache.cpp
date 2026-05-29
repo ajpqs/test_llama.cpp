@@ -1537,7 +1537,11 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
                     }
                 }
 
-                if (causal) {
+                if (args.hparams.block_diffusion_block_size > 0) {
+                    if (llama_hparams::is_masked_block_diffusion(p0, p1, args.hparams.block_diffusion_block_size)) {
+                        goto skip;
+                    }
+                } else if (causal) {
                     // mask future tokens
                     if (p0 > p1) {
                         goto skip;

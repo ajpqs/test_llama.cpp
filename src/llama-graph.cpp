@@ -403,8 +403,12 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                     continue;
                 }
 
-                // mask future tokens
-                if (cparams.causal_attn && p0 > p1) {
+                // mask future tokens (or future blocks for block diffusion)
+                if (hparams.block_diffusion_block_size > 0) {
+                    if (llama_hparams::is_masked_block_diffusion(p0, p1, hparams.block_diffusion_block_size)) {
+                        continue;
+                    }
+                } else if (cparams.causal_attn && p0 > p1) {
                     continue;
                 }
 

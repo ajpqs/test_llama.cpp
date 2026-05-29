@@ -152,6 +152,22 @@ def parse_args() -> argparse.Namespace:
         "--fp8-as-q8", action="store_true",
         help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
     )
+    parser.add_argument(
+        "--block-diffusion", action="store_true",
+        help="Add block-diffusion GGUF metadata.",
+    )
+    parser.add_argument(
+        "--block-diffusion-block-size", type=int, default=None,
+        help="Override block_diffusion.block_size.",
+    )
+    parser.add_argument(
+        "--block-diffusion-mask-token-id", type=int, default=None,
+        help="Override block_diffusion.mask_token_id.",
+    )
+    parser.add_argument(
+        "--block-diffusion-confidence-threshold", type=float, default=None,
+        help="Override block_diffusion.confidence_threshold.",
+    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -258,6 +274,18 @@ def main() -> None:
                 model_class.no_mtp = True
             if args.mtp:
                 model_class.mtp_only = True
+
+        if args.block_diffusion or hparams.get("block_diffusion", False):
+            from conversion.block_diffusion import wrap_model_class
+            bd_overrides: dict = {}
+            if args.block_diffusion_block_size is not None:
+                bd_overrides["block_diffusion_block_size"] = args.block_diffusion_block_size
+            if args.block_diffusion_mask_token_id is not None:
+                bd_overrides["block_diffusion_mask_token_id"] = args.block_diffusion_mask_token_id
+            if args.block_diffusion_confidence_threshold is not None:
+                bd_overrides["block_diffusion_confidence_threshold"] = args.block_diffusion_confidence_threshold
+            model_class = wrap_model_class(model_class, overrides=bd_overrides or None)
+            logger.info("Using block-diffusion metadata wrapper around %s", model_class.__bases__[1].__name__)
 
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,

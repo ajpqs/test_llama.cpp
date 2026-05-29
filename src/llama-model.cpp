@@ -1139,6 +1139,16 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         hparams.n_cls_out = classifier_labels.size();
     }
 
+    // block diffusion (arch-agnostic metadata)
+    ml.get_key(LLM_KV_BLOCK_DIFFUSION_BLOCK_SIZE, hparams.block_diffusion_block_size, false);
+    {
+        uint32_t mask_token_id = LLAMA_TOKEN_NULL;
+        if (ml.get_key(LLM_KV_BLOCK_DIFFUSION_MASK_TOKEN_ID, mask_token_id, false)) {
+            hparams.block_diffusion_mask_token_id = mask_token_id;
+        }
+    }
+    ml.get_key(LLM_KV_BLOCK_DIFFUSION_CONFIDENCE_THRESHOLD, hparams.block_diffusion_confidence_threshold, false);
+
     // per-arch hparams
     load_arch_hparams(ml);
 
@@ -2503,7 +2513,19 @@ bool llama_model_is_hybrid(const llama_model * model) {
 }
 
 bool llama_model_is_diffusion(const llama_model * model) {
-    return llm_arch_is_diffusion(model->arch);
+    return llm_arch_is_diffusion(model->arch) || model->hparams.block_diffusion_block_size > 0;
+}
+
+uint32_t llama_model_block_diffusion_block_size(const llama_model * model) {
+    return model->hparams.block_diffusion_block_size;
+}
+
+llama_token llama_model_block_diffusion_mask_token_id(const llama_model * model) {
+    return model->hparams.block_diffusion_mask_token_id;
+}
+
+float llama_model_block_diffusion_confidence_threshold(const llama_model * model) {
+    return model->hparams.block_diffusion_confidence_threshold;
 }
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {

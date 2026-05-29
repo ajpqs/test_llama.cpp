@@ -5,6 +5,7 @@ from .base import (
     logger, _mistral_common_installed, _mistral_import_error_msg,
     get_model_architecture, LazyTorchTensor,
 )
+from .block_diffusion import BlockDiffusionMixin, wrap_model_class
 from typing import Type
 
 
@@ -13,6 +14,7 @@ __all__ = [
     "get_model_architecture", "LazyTorchTensor", "logger",
     "_mistral_common_installed", "_mistral_import_error_msg",
     "get_model_class", "print_registered_models", "load_all_models",
+    "BlockDiffusionMixin", "wrap_model_class",
 ]
 
 

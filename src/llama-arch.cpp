@@ -293,6 +293,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DENSE_3_FEAT_IN,        "%s.dense_3_feat_in"   },
     { LLM_KV_DENSE_3_FEAT_OUT,       "%s.dense_3_feat_out"  },
 
+    { LLM_KV_BLOCK_DIFFUSION_BLOCK_SIZE,           "block_diffusion.block_size"           },
+    { LLM_KV_BLOCK_DIFFUSION_MASK_TOKEN_ID,        "block_diffusion.mask_token_id"        },
+    { LLM_KV_BLOCK_DIFFUSION_CONFIDENCE_THRESHOLD, "block_diffusion.confidence_threshold" },
+
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },
     { LLM_KV_TOKENIZER_LIST,                 "tokenizer.ggml.tokens"                   },

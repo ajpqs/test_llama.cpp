@@ -629,6 +629,10 @@ extern "C" {
     // Returns true if the model is diffusion-based (like LLaDA, Dream, etc.)
     LLAMA_API bool llama_model_is_diffusion(const struct llama_model * model);
 
+    LLAMA_API uint32_t    llama_model_block_diffusion_block_size(const struct llama_model * model);
+    LLAMA_API llama_token llama_model_block_diffusion_mask_token_id(const struct llama_model * model);
+    LLAMA_API float       llama_model_block_diffusion_confidence_threshold(const struct llama_model * model);
+
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,

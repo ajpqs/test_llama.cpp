@@ -357,7 +357,12 @@ class Keys:
             HEAD_COUNT      = "clip.audio.projector.head_count"
 
     class Diffusion:
-        SHIFT_LOGITS        = "diffusion.shift_logits"
+        SHIFT_LOGITS          = "diffusion.shift_logits"
+
+    class BlockDiffusion:
+        BLOCK_SIZE            = "block_diffusion.block_size"
+        CONFIDENCE_THRESHOLD  = "block_diffusion.confidence_threshold"
+        MASK_TOKEN_ID         = "block_diffusion.mask_token_id"
 
     class xIELU:
         ALPHA_P             = "xielu.alpha_p"

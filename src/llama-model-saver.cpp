@@ -314,6 +314,12 @@ void llama_model_saver::add_kv_from_model() {
 
     add_kv(LLM_KV_WKV_HEAD_SIZE,                     hparams.wkv_head_size);
 
+    if (hparams.block_diffusion_block_size > 0) {
+        add_kv(LLM_KV_BLOCK_DIFFUSION_BLOCK_SIZE,           hparams.block_diffusion_block_size);
+        add_kv(LLM_KV_BLOCK_DIFFUSION_MASK_TOKEN_ID,        uint32_t(hparams.block_diffusion_mask_token_id));
+        add_kv(LLM_KV_BLOCK_DIFFUSION_CONFIDENCE_THRESHOLD, hparams.block_diffusion_confidence_threshold);
+    }
+
     add_kv(LLM_KV_TOKENIZER_MODEL,                   vocab.get_tokenizer_model());
     add_kv(LLM_KV_TOKENIZER_PRE,                     vocab.get_tokenizer_pre());
     add_kv(LLM_KV_TOKENIZER_LIST,                    tokens);

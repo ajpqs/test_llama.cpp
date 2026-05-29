@@ -188,6 +188,10 @@ struct llama_hparams {
     float    f_attn_temp_scale       = 0.0f;
     float    f_attn_temp_offset      = 0.0f; // offset position index
 
+    uint32_t    block_diffusion_block_size           = 0;
+    llama_token block_diffusion_mask_token_id        = LLAMA_TOKEN_NULL;
+    float       block_diffusion_confidence_threshold = 0.95f;
+
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
     uint32_t i_altup_act  = 0; // altup_active_idx
@@ -352,6 +356,15 @@ struct llama_hparams {
         }
 
         return false;
+    }
+
+    // block-causal attention for block diffusion (mask out keys in future blocks)
+    static bool is_masked_block_diffusion(llama_pos p_key, llama_pos p_query, uint32_t block_size) {
+        assert(p_key >= 0 && p_query >= 0);
+        assert(block_size > 0);
+
+        return p_key / static_cast<llama_pos>(block_size) >
+               p_query / static_cast<llama_pos>(block_size);
     }
 
 
