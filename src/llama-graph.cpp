@@ -1656,6 +1656,16 @@ ggml_tensor * llm_graph_context::build_ffn(
                         type_gate = LLM_FFN_SEQ;
                         break;
                     }
+                } else if (arch == LLM_ARCH_GIGACHAT35 && il >= 0) {
+                    const float limit = hparams.swiglu_clamp_shexp[il];
+                    constexpr float eps = 1e-6f;
+                    if (limit > eps) {
+                        cur = ggml_clamp(ctx0, cur, -INFINITY, limit);
+                        cb(cur, "ffn_gate_clamped", il);
+
+                        tmp = ggml_clamp(ctx0, tmp, -limit, limit);
+                        cb(tmp, "ffn_up_clamped", il);
+                    }
                 }
 
                 cur = ggml_swiglu_split(ctx0, cur, tmp);
@@ -2039,6 +2049,18 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                         cb(cur, "ffn_moe_swiglu_limited", il);
                         break;
                     }
+                }
+            }
+
+            if (has_gate && arch == LLM_ARCH_GIGACHAT35 && il >= 0) {
+                const float limit = hparams.swiglu_clamp_exp[il];
+                constexpr float eps = 1e-6f;
+                if (limit > eps) {
+                    cur = ggml_clamp(ctx0, cur, -INFINITY, limit);
+                    cb(cur, "ffn_moe_gate_clamped", il);
+
+                    up = ggml_clamp(ctx0, up, -limit, limit);
+                    cb(up, "ffn_moe_up_clamped", il);
                 }
             }
 

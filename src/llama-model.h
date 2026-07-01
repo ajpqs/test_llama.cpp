@@ -214,16 +214,24 @@ struct llama_layer_nextn {
     struct ggml_tensor * eh_proj_in_s          = nullptr;
     struct ggml_tensor * embed_tokens          = nullptr;
     struct ggml_tensor * enorm                 = nullptr;
+    struct ggml_tensor * enorm_gate_up         = nullptr;
+    struct ggml_tensor * enorm_gate_down       = nullptr;
     struct ggml_tensor * hnorm                 = nullptr;
+    struct ggml_tensor * hnorm_gate_up         = nullptr;
+    struct ggml_tensor * hnorm_gate_down       = nullptr;
     struct ggml_tensor * shared_head_head      = nullptr;
     struct ggml_tensor * shared_head_head_s    = nullptr;
     struct ggml_tensor * shared_head_head_in_s = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
+    struct ggml_tensor * shared_head_norm_gate_up   = nullptr;
+    struct ggml_tensor * shared_head_norm_gate_down = nullptr;
 };
 
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;
+    struct ggml_tensor * attn_norm_gate_up   = nullptr;
+    struct ggml_tensor * attn_norm_gate_down = nullptr;
     struct ggml_tensor * attn_norm_b     = nullptr;
     struct ggml_tensor * attn_norm_2     = nullptr;
     struct ggml_tensor * attn_norm_2_b   = nullptr;
@@ -234,9 +242,15 @@ struct llama_layer {
     struct ggml_tensor * attn_out_norm   = nullptr;
     struct ggml_tensor * attn_out_norm_b = nullptr;
     struct ggml_tensor * attn_q_a_norm   = nullptr;
+    struct ggml_tensor * attn_q_a_norm_gate_up   = nullptr;
+    struct ggml_tensor * attn_q_a_norm_gate_down = nullptr;
     struct ggml_tensor * attn_kv_a_norm  = nullptr;
+    struct ggml_tensor * attn_kv_a_norm_gate_up   = nullptr;
+    struct ggml_tensor * attn_kv_a_norm_gate_down = nullptr;
     struct ggml_tensor * attn_sub_norm   = nullptr;
     struct ggml_tensor * attn_post_norm  = nullptr;
+    struct ggml_tensor * attn_post_norm_gate_up   = nullptr;
+    struct ggml_tensor * attn_post_norm_gate_down = nullptr;
     struct ggml_tensor * ffn_sub_norm    = nullptr;
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
@@ -278,8 +292,12 @@ struct llama_layer {
 
     // normalization
     struct ggml_tensor * ffn_norm         = nullptr;
+    struct ggml_tensor * ffn_norm_gate_up   = nullptr;
+    struct ggml_tensor * ffn_norm_gate_down = nullptr;
     struct ggml_tensor * ffn_norm_b       = nullptr;
     struct ggml_tensor * ffn_post_norm    = nullptr;
+    struct ggml_tensor * ffn_post_norm_gate_up   = nullptr;
+    struct ggml_tensor * ffn_post_norm_gate_down = nullptr;
     struct ggml_tensor * ffn_post_norm_1  = nullptr; // gemma4
     struct ggml_tensor * ffn_post_norm_2  = nullptr; // gemma4
     struct ggml_tensor * ffn_pre_norm_2   = nullptr; // gemma4
@@ -559,6 +577,8 @@ struct llama_model {
     struct ggml_tensor * tok_norm_b = nullptr;
 
     struct ggml_tensor * output_norm     = nullptr;
+    struct ggml_tensor * output_norm_gate_up   = nullptr;
+    struct ggml_tensor * output_norm_gate_down = nullptr;
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
